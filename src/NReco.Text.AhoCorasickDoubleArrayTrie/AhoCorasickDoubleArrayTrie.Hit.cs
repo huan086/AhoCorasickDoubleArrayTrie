@@ -11,50 +11,67 @@
  *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  */
 
+namespace NReco.Text;
+
+using System;
 using System.Globalization;
 
-namespace NReco.Text {
+/// <summary>
+/// A match result.
+/// </summary>
+/// <typeparam name="TValue">The type of value returned when search strings match.</typeparam>
+public struct AhoCorasickDoubleArrayTrieHit<TValue> : IEquatable<AhoCorasickDoubleArrayTrieHit<TValue>> {
+	/// <summary>
+	/// The beginning index, inclusive.
+	/// </summary>
+	public int Begin { get; }
 
-	public partial class AhoCorasickDoubleArrayTrie<V> {
-		/// <summary>
-		/// A match result.
-		/// </summary>
-		public struct Hit {
-			/// <summary>
-			/// The beginning index, inclusive.
-			/// </summary>
-			public readonly int Begin;
+	/// <summary>
+	/// The ending index, exclusive.
+	/// </summary>
+	public int End { get; }
 
-			/// <summary>
-			/// The ending index, exclusive.
-			/// </summary>
-			public readonly int End;
+	/// <summary>
+	/// The length of matched substring.
+	/// </summary>
+	public int Length => this.End - this.Begin;
 
-			/// <summary>
-			/// The length of matched substring.
-			/// </summary>
-			public int Length => this.End - this.Begin;
+	/// <summary>
+	/// The value assigned to the keyword.
+	/// </summary>
+	public TValue? Value { get; }
 
-			/// <summary>
-			/// The value assigned to the keyword.
-			/// </summary>
-			public readonly V Value;
+	/// <summary>
+	/// The index of the keyword
+	/// </summary>
+	public int Index { get; }
 
-			/// <summary>
-			/// The index of the keyword
-			/// </summary>
-			public readonly int Index;
-
-			public Hit(int begin, int end, V value, int index) {
-				this.Begin = begin;
-				this.End = end;
-				this.Value = value;
-				this.Index = index;
-			}
-
-			public override string ToString() {
-				return string.Format(CultureInfo.InvariantCulture, "[{0}:{1}]={2}", Begin, End, Value);
-			}
-		}
+	public AhoCorasickDoubleArrayTrieHit(int begin, int end, TValue? value, int index) {
+		this.Begin = begin;
+		this.End = end;
+		this.Value = value;
+		this.Index = index;
 	}
+
+	public override string ToString() =>
+		string.Format(CultureInfo.InvariantCulture, "[{0}:{1}]={2}", Begin, End, Value);
+
+	public override bool Equals(object? obj) =>
+		obj is AhoCorasickDoubleArrayTrieHit<TValue> other
+			&& this.Equals(other);
+
+	public override int GetHashCode() =>
+		HashCode.Combine(this.Begin, this.End, this.Index, this.Value);
+
+	public static bool operator ==(AhoCorasickDoubleArrayTrieHit<TValue> left, AhoCorasickDoubleArrayTrieHit<TValue> right) =>
+		left.Equals(right);
+
+	public static bool operator !=(AhoCorasickDoubleArrayTrieHit<TValue> left, AhoCorasickDoubleArrayTrieHit<TValue> right) =>
+		!(left == right);
+
+	public bool Equals(AhoCorasickDoubleArrayTrieHit<TValue> other) =>
+		this.Begin.Equals(other.Begin)
+			&& this.End.Equals(other.End)
+			&& this.Index.Equals(other.Index)
+			&& ((this.Value is null && other.Value is null) || (this.Value is not null && this.Value.Equals(other.Value)));
 }

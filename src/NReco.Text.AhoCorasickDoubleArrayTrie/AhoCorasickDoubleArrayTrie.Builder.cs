@@ -11,334 +11,414 @@
  *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  */
 
+namespace NReco.Text;
+
 using System;
 using System.Collections.Generic;
 
-namespace NReco.Text {
+/// <summary>
+/// A builder to build the AhoCorasickDoubleArrayTrie
+/// </summary>
+/// <typeparam name="TValue">The type of value returned when search strings match.</typeparam>
+public class AhoCorasickDoubleArrayTrieBuilder<TValue> {
+	private readonly bool ignoreCase;
 
-	public partial class AhoCorasickDoubleArrayTrie<V> {
-		// A builder to build the AhoCorasickDoubleArrayTrie
-		private class Builder {
-			// the root state of trie
-			private State rootState = new State();
+	/// <summary>
+	/// Outer value array
+	/// </summary>
+	private readonly List<TValue> values = new();
 
-			// whether the position has been used
-			private bool[] used;
+	/// <summary>
+	/// The length of every key.
+	/// </summary>
+	private readonly List<int> keyLengths = new();
 
-			// the allocSize of the dynamic array
-			private int allocSize;
+	/// <summary>
+	/// Check array of the Double Array Trie structure
+	/// </summary>
+	private int[] check = Array.Empty<int>();
 
-			// a parameter controls the memory growth speed of the dynamic array
-			private int progress;
+	/// <summary>
+	/// Base array of the Double Array Trie structure
+	/// </summary>
+	private int[] @base = Array.Empty<int>();
 
-			// the next position to check unused memory
-			private int nextCheckPos;
+	/// <summary>
+	/// Fail table of the Aho Corasick automata
+	/// </summary>
+	private IList<int> fail = Array.Empty<int>();
 
-			// the size of the key-pair sets
-			private int keySize;
+	/// <summary>
+	/// Output table of the Aho Corasick automata
+	/// </summary>
+	private IList<IList<int>?> output = Array.Empty<IList<int>?>();
 
-			private readonly AhoCorasickDoubleArrayTrie<V> trie;
+	/// <summary>
+	/// The root state of trie.
+	/// </summary>
+	private AhoCorasickDoubleArrayTrieState? rootState = new();
 
-			internal Builder(AhoCorasickDoubleArrayTrie<V> trie) {
-				this.trie = trie;
-			}
+	/// <summary>
+	/// Whether the position has been used
+	/// </summary>
+	private bool[] used = Array.Empty<bool>();
 
-			internal void Build(IEnumerable<KeyValuePair<string, V>> input) {
-				AddAllKeyword(input);
-				BuildDoubleArrayTrie(trie.v.Length);
-				used = null;
-				ConstructFailureStates();
-				rootState = null;
-				LoseWeight();
-			}
+	/// <summary>
+	/// The allocSize of the dynamic array
+	/// </summary>
+	private int allocSize;
 
-			/// <summary>
-			/// fetch siblings of a parent node
-			/// </summary>
-			/// <param name="parent">parent node</param>
-			/// <param name="siblings">siblings parent node's child nodes, i . e . the siblings</param>
-			/// <returns>the amount of the siblings</returns>
-			private static int Fetch(State parent, IList<KeyValuePair<int, State>> siblings) {
-				if (parent.IsAcceptable) {
-					State fakeNode = new State(-(parent.Depth + 1));
-					fakeNode.AddEmit(parent.LargestValueId);
-					siblings.Add(new KeyValuePair<int, State>(0, fakeNode));
+	/// <summary>
+	/// A parameter controls the memory growth speed of the dynamic array.
+	/// </summary>
+	private int progress;
+
+	/// <summary>
+	/// The next position to check unused memory
+	/// </summary>
+	private int nextCheckPos;
+
+	/// <summary>
+	/// The size of base and check array
+	/// </summary>
+	private int size;
+
+	public AhoCorasickDoubleArrayTrieBuilder(bool ignoreCase = false) =>
+		this.ignoreCase = ignoreCase;
+
+	public AhoCorasickDoubleArrayTrie<TValue> Build() {
+		this.BuildDoubleArrayTrie();
+		this.used = Array.Empty<bool>();
+		this.ConstructFailureStates();
+		this.rootState = null;
+		this.LoseWeight();
+
+		return new AhoCorasickDoubleArrayTrie<TValue>(this.ignoreCase, this.keyLengths.ToArray(), this.@base, this.check, this.fail, this.output, this.values.ToArray());
+	}
+
+	/// <summary>
+	/// fetch siblings of a parent node
+	/// </summary>
+	/// <param name="parent">parent node</param>
+	/// <param name="siblings">siblings parent node's child nodes, i . e . the siblings</param>
+	/// <returns>the amount of the siblings</returns>
+	private static int Fetch(AhoCorasickDoubleArrayTrieState parent, IList<KeyValuePair<int, AhoCorasickDoubleArrayTrieState>> siblings) {
+		if (parent.IsAcceptable) {
+			AhoCorasickDoubleArrayTrieState fakeNode = new(-(parent.Depth + 1));
+			fakeNode.AddEmit(parent.LargestValueId);
+			siblings.Add(new KeyValuePair<int, AhoCorasickDoubleArrayTrieState>(0, fakeNode));
+		}
+
+		foreach (var entry in parent.Success) {
+			siblings.Add(new KeyValuePair<int, AhoCorasickDoubleArrayTrieState>(entry.Key + 1, entry.Value));
+		}
+
+		return siblings.Count;
+	}
+
+	/// <summary>
+	/// Add a keyword
+	/// </summary>
+	/// <param name="keyword">The string to search.</param>
+	/// <param name="value">The value to return when keyword matches.</param>
+	/// <exception cref="ArgumentNullException"><paramref name="keyword"/> is <c>null</c>.</exception>
+	/// <exception cref="InvalidOperationException"><see cref="Build" /> has been called previously.</exception>
+	public void AddKeyword(string keyword, TValue value) {
+		if (keyword == null) {
+			throw new ArgumentNullException(nameof(keyword));
+		}
+
+		if (this.ignoreCase) {
+			keyword = keyword.ToUpperInvariant();
+		}
+
+		int index = this.keyLengths.Count;
+		AhoCorasickDoubleArrayTrieState? currentState = this.rootState;
+		if (currentState == null) {
+			throw new InvalidOperationException("Cannot add keyword after Build");
+		}
+
+		for (int i = 0; i < keyword.Length; i++) {
+			char character = keyword[i];
+			currentState = currentState.AddState(character);
+		}
+
+		currentState.AddEmit(index);
+
+		this.keyLengths.Add(keyword.Length);
+		this.values.Add(value);
+	}
+
+	/// <summary>
+	/// Add a collection of keywords
+	/// </summary>
+	/// <param name="keywordSet">Pairs of string to search and the value to return when it matches.</param>
+	/// <exception cref="ArgumentNullException"><paramref name="keywordSet"/> is <c>null</c>.</exception>
+	/// <exception cref="InvalidOperationException"><see cref="Build" /> has been called previously.</exception>
+	public void AddAllKeyword(IEnumerable<KeyValuePair<string, TValue>> keywordSet) {
+		if (keywordSet == null) {
+			throw new ArgumentNullException(nameof(keywordSet));
+		}
+
+		// if collection size is known, let's add it more efficiently
+		if (keywordSet is ICollection<KeyValuePair<string, TValue>> keywordCollection) {
+			this.AddAllKeyword(keywordCollection);
+			return;
+		}
+
+		foreach (var entry in keywordSet) {
+			this.AddKeyword(entry.Key, entry.Value);
+		}
+	}
+
+	/// <summary>
+	/// Add a collection of keywords
+	/// </summary>
+	/// <param name="keywordSet">Pairs of string to search and the value to return when it matches.</param>
+	/// <exception cref="ArgumentNullException"><paramref name="keywordSet"/> is <c>null</c>.</exception>
+	/// <exception cref="InvalidOperationException"><see cref="Build" /> has been called previously.</exception>
+	public void AddAllKeyword(ICollection<KeyValuePair<string, TValue>> keywordSet) {
+		if (keywordSet == null) {
+			throw new ArgumentNullException(nameof(keywordSet));
+		}
+
+		int ensureCapacity = keywordSet.Count + this.keyLengths.Count;
+		if (this.keyLengths.Capacity < ensureCapacity) {
+			int newCapacity = Math.Max(this.keyLengths.Capacity * 2, ensureCapacity);
+			this.keyLengths.Capacity = newCapacity;
+			this.values.Capacity = newCapacity;
+		}
+
+		foreach (var entry in keywordSet) {
+			this.AddKeyword(entry.Key, entry.Value);
+		}
+	}
+
+	/// <summary>
+	/// Construct failure table.
+	/// </summary>
+	/// <exception cref="InvalidOperationException"><see cref="Build" /> has been called previously.</exception>
+	private void ConstructFailureStates() {
+		if (this.rootState == null) {
+			throw new InvalidOperationException("Cannot ConstructFailureStates after Build");
+		}
+
+		this.fail = new int[this.size + 1];
+		this.output = new IList<int>?[this.size + 1];
+		var queue = new Queue<AhoCorasickDoubleArrayTrieState>();
+
+		foreach (AhoCorasickDoubleArrayTrieState depthOneState in this.rootState.States) {
+			depthOneState.SetFailure(this.rootState, this.fail);
+			queue.Enqueue(depthOneState);
+			this.ConstructOutput(depthOneState);
+		}
+
+		while (queue.Count > 0) {
+			AhoCorasickDoubleArrayTrieState currentState = queue.Dequeue();
+
+			foreach (var transition in currentState.Transitions) {
+				AhoCorasickDoubleArrayTrieState targetState = currentState.NextState(transition)
+					?? throw new InvalidOperationException("targetState is null");
+				queue.Enqueue(targetState);
+
+				AhoCorasickDoubleArrayTrieState traceFailureState = currentState.Failure
+					?? throw new InvalidOperationException("traceFailureState is null");
+				while (traceFailureState.NextState(transition) == null) {
+					traceFailureState = traceFailureState.Failure
+						?? throw new InvalidOperationException("traceFailureState is null");
 				}
 
-				foreach (var entry in parent.Success) {
-					siblings.Add(new KeyValuePair<int, State>(entry.Key + 1, entry.Value));
-				}
-
-				return siblings.Count;
-			}
-
-			// add a keyword
-			private void AddKeyword(string keyword, int index) {
-				State currentState = this.rootState;
-				if (currentState == null) {
-					throw new InvalidOperationException("Cannot add keyword after Build");
-				}
-
-				for (int i = 0; i < keyword.Length; i++) {
-					char character = keyword[i];
-					currentState = currentState.AddState(character);
-				}
-
-				currentState.AddEmit(index);
-			}
-
-			// add a collection of keywords
-			private void AddAllKeyword(IEnumerable<KeyValuePair<string, V>> keywordSet) {
-				// if collection size is known, let's add it more efficiently
-				if (keywordSet is ICollection<KeyValuePair<string, V>> keywordCollection) {
-					AddAllKeyword(keywordCollection);
-					return;
-				}
-
-				var l = new List<int>();
-				var v = new List<V>();
-				int i = 0;
-				foreach (var entry in keywordSet) {
-					AddKeyword(entry.Key, i);
-					l.Add(entry.Key.Length);
-					v.Add(entry.Value);
-					i++;
-				}
-
-				trie.l = l.ToArray();
-				trie.v = v.ToArray();
-			}
-
-			private void AddAllKeyword(ICollection<KeyValuePair<string, V>> keywordSet) {
-				trie.l = new int[keywordSet.Count];
-				trie.v = new V[keywordSet.Count];
-				int i = 0;
-				foreach (var entry in keywordSet) {
-					AddKeyword(entry.Key, i);
-					trie.l[i] = entry.Key.Length;
-					trie.v[i] = entry.Value;
-					i++;
-				}
-			}
-
-			// construct failure table
-			private void ConstructFailureStates() {
-				if (this.rootState == null) {
-					throw new InvalidOperationException("Cannot ConstructFailureStates after Build");
-				}
-
-				trie.fail = new int[trie.size + 1];
-				trie.output = new int[trie.size + 1][];
-				var queue = new Queue<State>();
-
-				foreach (State depthOneState in this.rootState.States) {
-					depthOneState.SetFailure(this.rootState, trie.fail);
-					queue.Enqueue(depthOneState);
-					ConstructOutput(depthOneState);
-				}
-
-				while (queue.Count > 0) {
-					State currentState = queue.Dequeue();
-
-					foreach (var transition in currentState.Transitions) {
-						State targetState = currentState.NextState(transition);
-						queue.Enqueue(targetState);
-
-						State traceFailureState = currentState.Failure;
-						while (traceFailureState.NextState(transition) == null) {
-							traceFailureState = traceFailureState.Failure;
-						}
-
-						State newFailureState = traceFailureState.NextState(transition);
-						targetState.SetFailure(newFailureState, trie.fail);
-						targetState.AddEmit(newFailureState.Emit);
-						ConstructOutput(targetState);
-					}
-				}
-			}
-
-			// construct output table
-			private void ConstructOutput(State targetState) {
-				var emit = targetState.Emit;
-				if (emit == null || emit.Count == 0)
-					return;
-				int[] output = new int[emit.Count];
-				int i = 0;
-				foreach (var entry in emit) {
-					output[i] = entry;
-					++i;
-				}
-				trie.output[targetState.Index] = output;
-			}
-
-			private void BuildDoubleArrayTrie(int keySize) {
-				if (this.rootState == null) {
-					throw new InvalidOperationException("Cannot BuildDoubleArrayTrie after Build");
-				}
-
-				this.progress = 0;
-				this.keySize = keySize;
-
-				this.Resize(65536 * 32);
-
-				this.trie.@base[0] = 1;
-				this.nextCheckPos = 0;
-
-				State rootNode = this.rootState;
-
-				var siblings = new List<KeyValuePair<int, State>>(rootNode.Success.Count);
-				Fetch(rootNode, siblings);
-				if (siblings.Count == 0) {
-					for (int i = 0; i < this.trie.check.Length; i++) {
-						this.trie.check[i] = -1;
-					}
-				} else {
-					this.Insert(siblings);
-				}
-			}
-
-			// allocate the memory of the dynamic array
-			private int Resize(int newSize) {
-				int[] base2 = new int[newSize];
-				int[] check2 = new int[newSize];
-				bool[] used2 = new bool[newSize];
-				if (allocSize > 0) {
-					Array.Copy(trie.@base, 0, base2, 0, allocSize);
-					Array.Copy(trie.check, 0, check2, 0, allocSize);
-					Array.Copy(used, 0, used2, 0, allocSize);
-				}
-
-				trie.@base = base2;
-				trie.check = check2;
-				used = used2;
-
-				return allocSize = newSize;
-			}
-
-			/// <summary>
-			/// insert the siblings to double array trie
-			/// </summary>
-			/// <param name="firstSiblings">the initial siblings being inserted</param>
-			private void Insert(IList<KeyValuePair<int, State>> firstSiblings) {
-				var siblingQueue = new Queue<KeyValuePair<int?, IList<KeyValuePair<int, State>>>>();
-				siblingQueue.Enqueue(new KeyValuePair<int?, IList<KeyValuePair<int, State>>>(null, firstSiblings));
-
-				while (siblingQueue.Count > 0) {
-					this.Insert(siblingQueue);
-				}
-			}
-
-			/// <summary>
-			/// insert the siblings to double array trie
-			/// </summary>
-			/// <param name="siblingQueue">a queue holding all siblings being inserted and the position to insert them</param>
-			private void Insert(Queue<KeyValuePair<int?, IList<KeyValuePair<int, State>>>> siblingQueue) {
-				KeyValuePair<int?, IList<KeyValuePair<int, State>>> tCurrent = siblingQueue.Dequeue();
-				IList<KeyValuePair<int, State>> siblings = tCurrent.Value;
-
-				int begin = 0;
-				int pos = Math.Max(siblings[0].Key + 1, nextCheckPos) - 1;
-				int nonzeroNum = 0;
-				int first = 0;
-
-				if (allocSize <= pos) {
-					Resize(pos + 1);
-				}
-
-				outer:
-				// The goal of this loop body is to find n free space that satisfies base[begin + a1...an] == 0, a1...an is the n nodes in the siblings
-				while (true) {
-					pos++;
-
-					if (allocSize <= pos) {
-						Resize(pos + 1);
-					}
-
-					if (trie.check[pos] != 0) {
-						nonzeroNum++;
-						continue;
-					} else if (first == 0) {
-						nextCheckPos = pos;
-						first = 1;
-					}
-
-					begin = pos - siblings[0].Key; // The distance of the current position from the first sibling node
-					if (allocSize <= (begin + siblings[siblings.Count - 1].Key)) {
-						// progress can be zero
-						// Prevents progress from generating division-by-zero errors
-						double toSize = Math.Max(1.05, 1.0 * keySize / (progress + 1)) * allocSize;
-						const int maxSize = (int)(int.MaxValue * 0.95);
-						if (allocSize >= maxSize) {
-							throw new NotSupportedException("Double array trie is too big.");
-						} else {
-							Resize((int)Math.Min(toSize, maxSize));
-						}
-					}
-
-					if (used[begin]) {
-						continue;
-					}
-
-					for (int i = 1; i < siblings.Count; i++) {
-						if (trie.check[begin + siblings[i].Key] != 0) {
-							goto outer;
-						}
-					}
-
-					break;
-				}
-
-				// -- Simple heuristics --
-				// if the percentage of non-empty contents in check between the
-				// index
-				// 'next_check_pos' and 'check' is greater than some constant value
-				// (e.g. 0.9),
-				// new 'next_check_pos' index is written by 'check'.
-				if (1.0 * nonzeroNum / (pos - nextCheckPos + 1) >= 0.95) {
-					nextCheckPos = pos; // Starting from the location next_check_pos to pos, if the space occupied is more than 95%, the next time you insert the node, start the lookup directly from the pos location
-				}
-
-				used[begin] = true;
-
-				trie.size = (trie.size > begin + siblings[siblings.Count - 1].Key + 1) ? trie.size : begin + siblings[siblings.Count - 1].Key + 1;
-
-				foreach (var sibling in siblings) {
-					trie.check[begin + sibling.Key] = begin;
-				}
-
-				foreach (var sibling in siblings) {
-					IList<KeyValuePair<int, State>> newSiblings = new List<KeyValuePair<int, State>>(sibling.Value.Success.Count + 1);
-
-					if (Fetch(sibling.Value, newSiblings) == 0)  // The termination of a word that is not a prefix for other words is actually a leaf node
-					{
-						trie.@base[begin + sibling.Key] = (-sibling.Value.LargestValueId - 1);
-						progress++;
-					} else {
-						siblingQueue.Enqueue(new KeyValuePair<int?, IList<KeyValuePair<int, State>>>(begin + sibling.Key, newSiblings));
-					}
-
-					sibling.Value.Index = begin + sibling.Key;
-				}
-
-				// Insert siblings
-				int? parentBaseIndex = tCurrent.Key;
-				if (parentBaseIndex != null) {
-					this.trie.@base[parentBaseIndex.Value] = begin;
-				}
-			}
-
-			// free the unnecessary memory
-			private void LoseWeight() {
-				//tbd: possible optimization for zero-value tail?..
-
-				int[] nbase = new int[trie.size + 65535];
-				Array.Copy(trie.@base, 0, nbase, 0, trie.size);
-				trie.@base = nbase;
-
-				int[] ncheck = new int[trie.size + 65535];
-				Array.Copy(trie.check, 0, ncheck, 0, Math.Min(trie.check.Length, ncheck.Length));
-				trie.check = ncheck;
+				AhoCorasickDoubleArrayTrieState? newFailureState = traceFailureState.NextState(transition)
+					?? throw new InvalidOperationException("newFailureState is null");
+				targetState.SetFailure(newFailureState, this.fail);
+				targetState.AddEmit(newFailureState.Emit);
+				this.ConstructOutput(targetState);
 			}
 		}
+	}
+
+	/// <summary>
+	/// Construct output table.
+	/// </summary>
+	/// <param name="targetState">The target state.</param>
+	private void ConstructOutput(AhoCorasickDoubleArrayTrieState targetState) {
+		var emit = targetState.Emit;
+		if (emit == null || emit.Count == 0) {
+			return;
+		}
+
+		int[] output = new int[emit.Count];
+		int i = 0;
+		foreach (var entry in emit) {
+			output[i] = entry;
+			++i;
+		}
+
+		this.output[targetState.Index] = output;
+	}
+
+	private void BuildDoubleArrayTrie() {
+		if (this.rootState == null) {
+			throw new InvalidOperationException("Cannot BuildDoubleArrayTrie after Build");
+		}
+
+		this.progress = 0;
+
+		this.Resize(65536 * 32);
+
+		this.@base[0] = 1;
+		this.nextCheckPos = 0;
+
+		AhoCorasickDoubleArrayTrieState rootNode = this.rootState;
+
+		var siblings = new List<KeyValuePair<int, AhoCorasickDoubleArrayTrieState>>(rootNode.Success.Count);
+		Fetch(rootNode, siblings);
+		if (siblings.Count == 0) {
+			for (int i = 0; i < this.check.Length; i++) {
+				this.check[i] = -1;
+			}
+		} else {
+			this.Insert(siblings);
+		}
+	}
+
+	/// <summary>
+	/// Allocate the memory of the dynamic array.
+	/// </summary>
+	/// <param name="newSize">The length of the new arrays.</param>
+	private void Resize(int newSize) {
+		Array.Resize(ref this.@base, newSize);
+		Array.Resize(ref this.check, newSize);
+		Array.Resize(ref this.used, newSize);
+		this.allocSize = newSize;
+	}
+
+	/// <summary>
+	/// insert the siblings to double array trie
+	/// </summary>
+	/// <param name="firstSiblings">the initial siblings being inserted</param>
+	private void Insert(IList<KeyValuePair<int, AhoCorasickDoubleArrayTrieState>> firstSiblings) {
+		var siblingQueue = new Queue<KeyValuePair<int?, IList<KeyValuePair<int, AhoCorasickDoubleArrayTrieState>>>>();
+		siblingQueue.Enqueue(new KeyValuePair<int?, IList<KeyValuePair<int, AhoCorasickDoubleArrayTrieState>>>(null, firstSiblings));
+
+		while (siblingQueue.Count > 0) {
+			this.Insert(siblingQueue);
+		}
+	}
+
+	/// <summary>
+	/// insert the siblings to double array trie
+	/// </summary>
+	/// <param name="siblingQueue">a queue holding all siblings being inserted and the position to insert them</param>
+	/// <exception cref="NotSupportedException">The total length of the keywords is too large.</exception>
+	private void Insert(Queue<KeyValuePair<int?, IList<KeyValuePair<int, AhoCorasickDoubleArrayTrieState>>>> siblingQueue) {
+		KeyValuePair<int?, IList<KeyValuePair<int, AhoCorasickDoubleArrayTrieState>>> tCurrent = siblingQueue.Dequeue();
+		IList<KeyValuePair<int, AhoCorasickDoubleArrayTrieState>> siblings = tCurrent.Value;
+
+		int begin;
+		int pos = Math.Max(siblings[0].Key + 1, this.nextCheckPos) - 1;
+		int nonzeroNum = 0;
+		int first = 0;
+
+		if (this.allocSize <= pos) {
+			this.Resize(pos + 1);
+		}
+
+		outer:
+		// The goal of this loop body is to find n free space that satisfies base[begin + a1...an] == 0, a1...an is the n nodes in the siblings
+		while (true) {
+			pos++;
+
+			if (this.allocSize <= pos) {
+				this.Resize(pos + 1);
+			}
+
+			if (this.check[pos] != 0) {
+				nonzeroNum++;
+				continue;
+			} else if (first == 0) {
+				this.nextCheckPos = pos;
+				first = 1;
+			}
+
+			begin = pos - siblings[0].Key; // The distance of the current position from the first sibling node
+			if (this.allocSize <= (begin + siblings[siblings.Count - 1].Key)) {
+				// progress can be zero
+				// Prevents progress from generating division-by-zero errors
+				double toSize = Math.Max(1.05, 1.0 * this.keyLengths.Count / (this.progress + 1)) * this.allocSize;
+				const int maxSize = (int)(int.MaxValue * 0.95);
+				if (this.allocSize >= maxSize) {
+					throw new NotSupportedException("Double array trie is too big.");
+				}
+
+				this.Resize((int)Math.Min(toSize, maxSize));
+			}
+
+			if (this.used[begin]) {
+				continue;
+			}
+
+			for (int i = 1; i < siblings.Count; i++) {
+				if (this.check[begin + siblings[i].Key] != 0) {
+					goto outer;
+				}
+			}
+
+			break;
+		}
+
+		// -- Simple heuristics --
+		// if the percentage of non-empty contents in check between the
+		// index
+		// 'next_check_pos' and 'check' is greater than some constant value
+		// (e.g. 0.9),
+		// new 'next_check_pos' index is written by 'check'.
+		if (1.0 * nonzeroNum / (pos - this.nextCheckPos + 1) >= 0.95) {
+			this.nextCheckPos = pos; // Starting from the location next_check_pos to pos, if the space occupied is more than 95%, the next time you insert the node, start the lookup directly from the pos location
+		}
+
+		this.used[begin] = true;
+
+		this.size = (this.size > begin + siblings[siblings.Count - 1].Key + 1)
+			? this.size
+			: begin + siblings[siblings.Count - 1].Key + 1;
+
+		foreach (var sibling in siblings) {
+			this.check[begin + sibling.Key] = begin;
+		}
+
+		foreach (var sibling in siblings) {
+			IList<KeyValuePair<int, AhoCorasickDoubleArrayTrieState>> newSiblings = new List<KeyValuePair<int, AhoCorasickDoubleArrayTrieState>>(sibling.Value.Success.Count + 1);
+
+			if (Fetch(sibling.Value, newSiblings) == 0) // The termination of a word that is not a prefix for other words is actually a leaf node
+			{
+				this.@base[begin + sibling.Key] = -sibling.Value.LargestValueId - 1;
+				this.progress++;
+			} else {
+				siblingQueue.Enqueue(new KeyValuePair<int?, IList<KeyValuePair<int, AhoCorasickDoubleArrayTrieState>>>(begin + sibling.Key, newSiblings));
+			}
+
+			sibling.Value.Index = begin + sibling.Key;
+		}
+
+		// Insert siblings
+		int? parentBaseIndex = tCurrent.Key;
+		if (parentBaseIndex != null) {
+			this.@base[parentBaseIndex.Value] = begin;
+		}
+	}
+
+	/// <summary>
+	/// Free the unnecessary memory.
+	/// </summary>
+	private void LoseWeight() {
+		//tbd: possible optimization for zero-value tail?..
+		int[] newBase = new int[this.size + 65535];
+		Array.Copy(this.@base, 0, newBase, 0, this.size);
+		this.@base = newBase;
+
+		int[] newCheck = new int[this.size + 65535];
+		Array.Copy(this.check, 0, newCheck, 0, Math.Min(this.check.Length, newCheck.Length));
+		this.check = newCheck;
 	}
 }
